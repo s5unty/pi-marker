@@ -71,7 +71,15 @@ export function harness(entries = [assistantEntry("Hello **marker** world. ä¸­æ–
     getBranch: () => branch,
     getMode: () => mode,
     getSpans: () => spans,
-    commitSelection: (selected) => { spans = [...spans, ...selected]; return true; },
+    commitSelection: (selected, erased) => {
+      if (erased) {
+        const replacements = new Map(erased.map(({ span, remaining }) => [span, remaining]));
+        spans = spans.flatMap((span) => replacements.get(span) ?? [span]);
+        return erased.length > 0;
+      }
+      spans = [...spans, ...selected];
+      return true;
+    },
     report: (message) => reports.push(message),
   });
   tui.start();

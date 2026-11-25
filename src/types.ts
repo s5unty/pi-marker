@@ -15,3 +15,9 @@ export interface MarkGroup {
   id: string;
   spans: MarkSpan[];
 }
+
+/** In-memory edit: span is the original saved object; remaining has fresh anchors. */
+export interface SpanReplacement {
+  span: MarkSpan;
+  remaining: MarkSpan[];
+}

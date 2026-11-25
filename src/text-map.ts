@@ -95,6 +95,21 @@ export function findTextRanges(map: TextMap, text: string): TextRange[] {
   return matches;
 }
 
+/** Subtract half-open ranges without mutating the original range or cuts. */
+export function subtractRanges(range: TextRange, cuts: readonly TextRange[]): TextRange[] {
+  const remaining: TextRange[] = [];
+  let start = range.start;
+  for (const cut of [...cuts].sort((a, b) => a.start - b.start)) {
+    if (cut.end <= start || cut.end <= cut.start) continue;
+    if (cut.start >= range.end) break;
+    if (cut.start > start) remaining.push({ start, end: cut.start });
+    start = Math.max(start, Math.min(cut.end, range.end));
+    if (start >= range.end) break;
+  }
+  if (start < range.end) remaining.push({ start, end: range.end });
+  return remaining;
+}
+
 function mergeRanges(ranges: readonly TextRange[]): TextRange[] {
   const merged: TextRange[] = [];
   for (const range of [...ranges].sort((a, b) => a.start - b.start)) {

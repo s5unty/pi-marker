@@ -3,7 +3,7 @@ import { copyToClipboard, VERSION, type ExtensionAPI, type ExtensionContext, typ
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { MarkerAdapter, resolveRenderer, TESTED_PI_VERSION } from "./pi-adapter.ts";
 import { ENTRY_TYPE, MarkerStore, type MarkerOperation } from "./store.ts";
-import type { MarkSpan, MarkerMode } from "./types.ts";
+import type { MarkSpan, MarkerMode, SpanReplacement } from "./types.ts";
 import { formatHighlights } from "./markdown-export.ts";
 import { parseExportDestination, saveMarkdown } from "./export-output.ts";
 
@@ -78,11 +78,10 @@ export default function markerExtension(pi: ExtensionAPI, services: MarkerServic
     return true;
   };
 
-  const commitSelection = (spans: MarkSpan[]): boolean => {
-    if (mode === "erase") {
-      const groupIds = store.intersectingGroups(spans);
-      if (groupIds.length === 0) { report("选区没有与已保存的标记相交。"); return false; }
-      return commit({ version: 1, kind: "remove", groupIds });
+  const commitSelection = (spans: MarkSpan[], erased?: readonly SpanReplacement[]): boolean => {
+    if (erased) {
+      if (erased.length === 0) { report("选区没有与已保存的标记相交。"); return false; }
+      return commit(store.replaceSpans(erased));
     }
     return commit({ version: 1, kind: "add", group: { id: randomUUID(), spans } });
   };
@@ -255,7 +254,7 @@ export default function markerExtension(pi: ExtensionAPI, services: MarkerServic
               "\n未匹配的标记会保留记录但不绘制，不猜测位置。", "info");
             break;
           }
-          case "help": ctx.ui.notify(HELP + "\n开启后拖选，松开保留；erase 删除相交的整笔标记；off 恢复普通复制。\nexport 将当前分支的全部高亮保存为 Markdown 文件，不覆盖已有文件；copy 将相同内容复制到剪贴板。", "info"); break;
+          case "help": ctx.ui.notify(HELP + "\n开启后拖选：碰到高亮只擦除交集，无交集则新增；拖动实时预览，松手保存，Esc 取消。erase 始终局部擦除；off 恢复普通复制。\nexport 将当前分支的全部高亮保存为 Markdown 文件，不覆盖已有文件；copy 将相同内容复制到剪贴板。", "info"); break;
           default: throw new Error(HELP);
         }
       } catch (error) {

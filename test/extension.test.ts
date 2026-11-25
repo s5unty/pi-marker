@@ -6,7 +6,7 @@ import test from "node:test";
 import { SessionManager, discoverAndLoadExtensions, type ExtensionAPI, type ExtensionContext, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Container, ScrollView, Text, TuiAltScreen, TuiMainScreen, VStack, stripTerminalSequences, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import markerExtension from "../src/index.ts";
-import { ENTRY_TYPE } from "../src/store.ts";
+import { ENTRY_TYPE, MarkerStore } from "../src/store.ts";
 import { assistantEntry, componentFor, FakeTerminal, highlightedText } from "./helpers.ts";
 
 type EventHandler = (event: object, context: ExtensionContext) => unknown;
@@ -92,20 +92,26 @@ function extensionFixture(manager: SessionManager, loaded?: Awaited<ReturnType<t
     await commands.get("marker")!.handler(args, context);
     tui.renderNow();
   };
-  const drag = (text: string) => {
+  const locate = (text: string) => {
     const row = screen().findIndex((line) => stripTerminalSequences(line).includes(text));
     assert.ok(row >= 0);
     const line = stripTerminalSequences(screen()[row]);
     const start = visibleWidth(line.slice(0, line.indexOf(text)));
-    const end = start + visibleWidth(text) - 1;
-    for (const [button, col, suffix] of [[0, start, "M"], [32, end, "M"], [0, end, "m"]] as const) {
-      terminal.send(`\x1b[<${button};${col + 1};${row + 1}${suffix}`);
-      tui.renderNow();
-    }
+    return { row, start, end: start + visibleWidth(text) - 1 };
+  };
+  const mouse = (button: number, col: number, row: number, release = false) => {
+    terminal.send(`\x1b[<${button};${col + 1};${row + 1}${release ? "m" : "M"}`);
+    tui.renderNow();
+  };
+  const drag = (text: string, reverse = false) => {
+    const { row, start, end } = locate(text);
+    mouse(0, reverse ? end : start, row);
+    mouse(32, reverse ? start : end, row);
+    mouse(0, reverse ? start : end, row, true);
   };
   return {
     get tui() { return tui as TuiAltScreen; },
-    terminal, notifications, clipboard, statuses, events, context, command, drag,
+    terminal, notifications, clipboard, statuses, events, context, command, drag, locate, mouse,
     set rejectClipboard(value: boolean) { rejectClipboard = value; },
     set rejectWrites(value: boolean) { rejectWrites = value; },
     reload() {
@@ -334,6 +340,220 @@ test("export follows the active branch and works after extension reload", async 
     f.reload();
     await f.command("copy");
     assert.equal(f.clipboard.at(-1), "this phrase\n");
+  } finally { f.close(); s.clean(); }
+});
+
+test("drag erasure previews immediately, shrinks from the saved snapshot and commits one undo step", async () => {
+  const s = session("ABCDEFGHIJ");
+  const f = extensionFixture(s.manager);
+  try {
+    await f.command("on");
+    f.drag("ABCDEFGHIJ");
+    const leaf = s.manager.getLeafId();
+    const plain = f.tui.getScreenLines().map(stripTerminalSequences);
+    const { row, start, end } = f.locate("CDEFG");
+    f.mouse(0, start, row);
+    f.mouse(32, end, row);
+    assert.equal(highlightedText(f.tui.getScreenLines()), "ABHIJ");
+    assert.ok(!f.tui.getScreenLines()[row].includes("\x1b[7m"), "native inverse selection must not cover erased text");
+    assert.equal(s.manager.getLeafId(), leaf, "motion is not persisted");
+    assert.deepEqual(f.tui.getScreenLines().map(stripTerminalSequences), plain);
+    f.mouse(32, start + 1, row);
+    assert.equal(highlightedText(f.tui.getScreenLines()), "ABEFGHIJ", "shrinking restores the unselected tail");
+    f.mouse(0, start + 1, row, true);
+    assert.equal(highlightedText(f.tui.getScreenLines()), "ABEFGHIJ");
+    assert.equal(f.tui.hasActiveSelection(), false);
+    const entry = s.manager.getLeafEntry();
+    assert.ok(entry?.type === "custom");
+    assert.equal(entry.parentId, leaf, "one operation per drag");
+    assert.equal((entry.data as { kind: string }).kind, "replace");
+    await f.command("undo");
+    assert.equal(highlightedText(f.tui.getScreenLines()), "ABCDEFGHIJ");
+    await f.command("undo");
+    assert.equal(highlightedText(f.tui.getScreenLines()), "");
+  } finally { f.close(); s.clean(); }
+});
+
+test("mixed selections erase every overlapping stroke but never color new text", async () => {
+  const s = session("aa BBBB cc DDDD ee");
+  const f = extensionFixture(s.manager);
+  try {
+    for (const text of ["BBBB", "BBBB", "DDDD", "ee"]) await f.command(`text ${text}`);
+    await f.command("on");
+    f.drag("aa BBBB cc DD", true);
+    assert.equal(highlightedText(f.tui.getScreenLines()), "DDee");
+    const store = new MarkerStore();
+    assert.equal(store.restore(s.manager.getBranch()).invalid, 0);
+    assert.equal(store.groups.length, 2);
+    await f.command("undo");
+    assert.equal(highlightedText(f.tui.getScreenLines()), "BBBBDDDDee");
+    f.drag("aa");
+    assert.equal(highlightedText(f.tui.getScreenLines()), "aaBBBBDDDDee", "no overlap still adds a mark");
+  } finally { f.close(); s.clean(); }
+});
+
+test("moving back out of an overlap restores the highlight and commits only the final new selection", async () => {
+  const s = session("aa BBBB cc");
+  const f = extensionFixture(s.manager);
+  try {
+    await f.command("text BBBB");
+    await f.command("on");
+    const { row, start, end } = f.locate("aa BB");
+    f.mouse(0, start, row);
+    f.mouse(32, end, row);
+    assert.equal(highlightedText(f.tui.getScreenLines()), "BB");
+    f.mouse(32, start + 1, row);
+    assert.equal(highlightedText(f.tui.getScreenLines()), "BBBB");
+    f.mouse(0, start + 1, row, true);
+    assert.equal(highlightedText(f.tui.getScreenLines()), "aaBBBB");
+    await f.command("undo");
+    assert.equal(highlightedText(f.tui.getScreenLines()), "BBBB");
+  } finally { f.close(); s.clean(); }
+});
+
+test("split Unicode anchors survive reopening, reflow, Markdown export and undo", async () => {
+  const s = session("Before **甲乙丙丁戊己** after.");
+  let f = extensionFixture(s.manager);
+  try {
+    await f.command("text 甲乙丙丁戊己");
+    await f.command("on");
+    f.drag("丙丁", true);
+    assert.equal(highlightedText(f.tui.getScreenLines()), "甲乙戊己");
+    f.close();
+    const reopened = SessionManager.open(s.manager.getSessionFile()!, s.directory);
+    f = extensionFixture(reopened);
+    f.terminal.resize(23);
+    f.tui.renderNow();
+    assert.equal(highlightedText(f.tui.getScreenLines()), "甲乙戊己");
+    await f.command("copy");
+    assert.equal(f.clipboard.at(-1), "**甲乙**\n\n---\n\n**戊己**\n");
+    await f.command("undo");
+    assert.equal(highlightedText(f.tui.getScreenLines()), "甲乙丙丁戊己");
+  } finally { f.close(); s.clean(); }
+});
+
+test("partial erase preserves whole emoji and combining graphemes", async () => {
+  const s = session("AB👩🏽‍💻éCD");
+  const f = extensionFixture(s.manager);
+  try {
+    await f.command("text AB👩🏽‍💻éCD");
+    await f.command("on");
+    f.drag("👩🏽‍💻é");
+    assert.equal(highlightedText(f.tui.getScreenLines()), "ABCD");
+    await f.command("copy");
+    assert.equal(f.clipboard.at(-1), "AB\n\n---\n\nCD\n");
+  } finally { f.close(); s.clean(); }
+});
+
+test("erasing part of a multi-message stroke preserves its other spans and stroke identity", async () => {
+  const s = session("ABCD EFGH");
+  s.manager.appendMessage(assistantEntry("IJKL MNOP").message);
+  const f = extensionFixture(s.manager);
+  try {
+    await f.command("on");
+    const first = f.locate("ABCD EFGH");
+    const last = f.locate("IJKL MNOP");
+    f.mouse(0, first.start, first.row);
+    f.mouse(32, last.end, last.row);
+    f.mouse(0, last.end, last.row, true);
+    const store = new MarkerStore();
+    store.restore(s.manager.getBranch());
+    const original = store.groups[0];
+    assert.equal(original.spans.length, 2);
+    f.drag("BC");
+    assert.equal(highlightedText(f.tui.getScreenLines()), "AD EFGHIJKL MNOP");
+    store.restore(s.manager.getBranch());
+    assert.equal(store.groups.length, 1);
+    assert.equal(store.groups[0].id, original.id);
+    assert.equal(store.spans.length, 3);
+    assert.deepEqual(store.spans[2], original.spans[1]);
+    await f.command("undo");
+    assert.equal(highlightedText(f.tui.getScreenLines()), "ABCD EFGHIJKL MNOP");
+  } finally { f.close(); s.clean(); }
+});
+
+test("explicit erase mode and keyboard erasure subtract only selected text", async () => {
+  const s = session("ABCDEFGHIJ");
+  const f = extensionFixture(s.manager);
+  try {
+    await f.command("text ABCDEFGHIJ");
+    await f.command("erase");
+    f.drag("CDEF");
+    assert.equal(highlightedText(f.tui.getScreenLines()), "ABGHIJ");
+    await f.command("undo");
+    await f.command("text CDEF");
+    assert.equal(highlightedText(f.tui.getScreenLines()), "ABGHIJ");
+    const leaf = s.manager.getLeafId();
+    f.drag("CDEF");
+    assert.equal(s.manager.getLeafId(), leaf);
+    assert.match(f.notifications.at(-1)!, /没有.*相交/);
+  } finally { f.close(); s.clean(); }
+});
+
+test("cancel, focus loss, mode changes, resize and reload discard the preview without saving", async () => {
+  for (const action of ["escape", "focus-loss", "off", "resize", "reload"]) {
+    const s = session("ABCDEFGHIJ");
+    const f = extensionFixture(s.manager);
+    try {
+      await f.command("text ABCDEFGHIJ");
+      await f.command("on");
+      const leaf = s.manager.getLeafId();
+      const { row, start, end } = f.locate("CDEF");
+      f.mouse(0, start, row);
+      f.mouse(32, end, row);
+      assert.equal(highlightedText(f.tui.getScreenLines()), "ABGHIJ", action);
+      if (action === "escape") f.terminal.send("\x1b");
+      else if (action === "focus-loss") f.terminal.send("\x1b[O");
+      else if (action === "off") await f.command("off");
+      else if (action === "resize") f.terminal.resize(70);
+      else f.reload();
+      f.tui.renderNow();
+      assert.equal(highlightedText(f.tui.getScreenLines()), "ABCDEFGHIJ", action);
+      assert.equal(s.manager.getLeafId(), leaf, action);
+      f.mouse(0, end, row, true);
+      assert.equal(s.manager.getLeafId(), leaf, `late release after ${action}`);
+    } finally { f.close(); s.clean(); }
+  }
+});
+
+test("a failed erasure write restores the original highlight and leaves undo history intact", async () => {
+  const s = session("ABCDEFGHIJ");
+  const f = extensionFixture(s.manager);
+  try {
+    await f.command("text ABCDEFGHIJ");
+    await f.command("on");
+    const leaf = s.manager.getLeafId();
+    f.rejectWrites = true;
+    const { row, start, end } = f.locate("CDEF");
+    f.mouse(0, start, row);
+    f.mouse(32, end, row);
+    assert.equal(highlightedText(f.tui.getScreenLines()), "ABGHIJ");
+    f.mouse(0, end, row, true);
+    assert.equal(highlightedText(f.tui.getScreenLines()), "ABCDEFGHIJ");
+    assert.equal(f.tui.hasActiveSelection(), false);
+    assert.equal(s.manager.getLeafId(), leaf);
+    assert.match(f.notifications.at(-1)!, /保存失败/);
+    f.rejectWrites = false;
+    await f.command("undo");
+    assert.equal(highlightedText(f.tui.getScreenLines()), "");
+  } finally { f.close(); s.clean(); }
+});
+
+test("full erasure restores the exact original ANSI-styled frame, including during preview", async () => {
+  const s = session("**bold** and *italic* and `code`");
+  const f = extensionFixture(s.manager);
+  try {
+    const original = f.tui.getScreenLines();
+    await f.command("on");
+    f.drag("bold and italic and code");
+    const { row, start, end } = f.locate("bold and italic and code");
+    f.mouse(0, start, row);
+    f.mouse(32, end, row);
+    assert.deepEqual(f.tui.getScreenLines(), original);
+    f.mouse(0, end, row, true);
+    assert.deepEqual(f.tui.getScreenLines(), original);
+    await f.command("undo");
+    assert.equal(highlightedText(f.tui.getScreenLines()), "bold and italic and code");
   } finally { f.close(); s.clean(); }
 });
 

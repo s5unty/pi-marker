@@ -1,7 +1,7 @@
 import { AssistantMessageComponent, type SessionEntry } from "@earendil-works/pi-coding-agent";
-import { Container, MouseRegion, type Component, type Token, type TUI } from "@earendil-works/pi-tui";
-import { buildTextMap, cellsForTextRange, findTextRanges, hashText, paintLine, quoteForRange, textRangeForCells, type TextMap, type TextRange } from "./text-map.ts";
-import type { MarkSpan, MarkerMode } from "./types.ts";
+import { Container, MouseRegion, matchesKey, type Component, type Token, type TUI } from "@earendil-works/pi-tui";
+import { buildTextMap, cellsForTextRange, findTextRanges, hashText, paintLine, quoteForRange, subtractRanges, textRangeForCells, type TextMap, type TextRange } from "./text-map.ts";
+import type { MarkSpan, MarkerMode, SpanReplacement } from "./types.ts";
 import type { MarkdownEvidence, MarkdownSelection } from "./markdown-export.ts";
 
 export const TESTED_PI_VERSION = "1.5.2";
@@ -48,6 +48,8 @@ interface PrivateTui {
   getSelectionBounds(): Selection | undefined;
   getSelectionColumns(line: string, row: number, selection: Selection): { start: number; end: number };
   applySearchHighlights(screen: string[], frame: Frame): string[];
+  applySelection(screen: string[], frame?: Frame): string[];
+  handleViewportInput(data: string): { consume: true } | undefined;
   getCopyOnSelect(): boolean;
   setCopyOnSelect(enabled: boolean): void;
   resetTextSelection(): void;
@@ -60,7 +62,7 @@ export interface AdapterHost {
   getBranch(): readonly SessionEntry[];
   getMode(): MarkerMode;
   getSpans(): readonly MarkSpan[];
-  commitSelection(spans: MarkSpan[]): boolean;
+  commitSelection(spans: MarkSpan[], erased?: readonly SpanReplacement[]): boolean;
   report(message: string): void;
 }
 
@@ -74,6 +76,15 @@ export interface RenderedBlock {
 }
 export type ExportSelection = MarkdownSelection;
 interface Snapshot { frame: Frame; box: LayoutBox; blocks: RenderedBlock[]; tidyMessages: number }
+interface Drag {
+  lines: readonly string[];
+  width: number;
+  height: number;
+  scrollView?: ScrollState;
+  identity: string;
+  spans: readonly MarkSpan[];
+  mode: MarkerMode;
+}
 
 function snapshotIdentity(snapshot: Snapshot | undefined): string {
   return JSON.stringify(snapshot?.blocks.map((block) => [block.entryId, block.blockIndex, block.sourceHash, block.top, block.map.hash]) ?? []);
@@ -250,7 +261,8 @@ export class MarkerAdapter {
     source: string; lines: readonly string[]; displayed: readonly string[]; map?: TextMap; sourceHash: string;
   }>();
   private snapshot?: Snapshot;
-  private drag?: { lines: readonly string[]; width: number; height: number; scrollView?: ScrollState; identity: string };
+  private drag?: Drag;
+  private preview?: readonly MarkSpan[];
   private mapped = 0;
 
   constructor(renderer: object, host: AdapterHost) {
@@ -259,7 +271,7 @@ export class MarkerAdapter {
     }
     const tui = renderer as PrivateTui;
     if (tui.mode !== "fullscreen") throw new Error("pi-marker 需要 Fullscreen 模式。");
-    for (const name of ["handleSelectionMouseEvent", "getSelectionBounds", "getSelectionColumns", "applySearchHighlights", "getCopyOnSelect", "setCopyOnSelect", "resetTextSelection", "requestRender"] as const) {
+    for (const name of ["handleSelectionMouseEvent", "getSelectionBounds", "getSelectionColumns", "applySearchHighlights", "applySelection", "handleViewportInput", "getCopyOnSelect", "setCopyOnSelect", "resetTextSelection", "requestRender"] as const) {
       if (typeof tui[name] !== "function") throw new Error(`不兼容的 Pi TUI：缺少 ${name}。`);
     }
     if (!(tui.inputListeners instanceof Set)) throw new Error("不兼容的 Pi TUI 输入层。");
@@ -274,11 +286,27 @@ export class MarkerAdapter {
         if (!adapter.disposed && !adapter.failed) {
           try {
             adapter.snapshot = adapter.collect(frame);
+            adapter.updatePreview();
             decorated = adapter.paint(screen);
           } catch (error) { adapter.fail(error); }
         }
         // Markers are below native search, overlays, and active selection.
         return original.call(this, decorated, frame);
+      });
+      this.patch("applySelection", function (original, screen, frame) {
+        // Keep the native drag geometry/autoscroll, but don't cover an erasure
+        // preview with inverse-video selection: erased text shows its real style.
+        if (!adapter.disposed && !adapter.failed && adapter.preview !== undefined) return screen;
+        return original.call(this, screen, frame);
+      });
+      this.patch("handleViewportInput", function (original, data) {
+        // Pi's first input listener calls this method dynamically. Cancel before
+        // native search can consume Escape, while still letting it close search.
+        if (!adapter.disposed && !adapter.failed && adapter.drag && this.selectionPressActive && matchesKey(data, "escape")) {
+          adapter.cancelSelection();
+          return original.call(this, data) ?? { consume: true };
+        }
+        return original.call(this, data);
       });
       this.patch("handleSelectionMouseEvent", function (original, event) {
         const active = !adapter.disposed && !adapter.failed && adapter.host.getMode() !== "off";
@@ -300,7 +328,7 @@ export class MarkerAdapter {
     tui.requestRender();
   }
 
-  private patch<K extends "handleSelectionMouseEvent" | "applySearchHighlights">(
+  private patch<K extends "handleSelectionMouseEvent" | "applySearchHighlights" | "applySelection" | "handleViewportInput">(
     key: K,
     wrapper: (this: PrivateTui, original: PrivateTui[K], ...args: Parameters<PrivateTui[K]>) => ReturnType<PrivateTui[K]>,
   ): void {
@@ -320,6 +348,7 @@ export class MarkerAdapter {
   private fail(error: unknown): void {
     this.failed = true;
     this.drag = undefined;
+    this.preview = undefined;
     this.host.report(`pi-marker 已停止标记以保护显示：${error instanceof Error ? error.message : String(error)}`);
     this.tui.requestRender();
   }
@@ -442,7 +471,7 @@ export class MarkerAdapter {
     const left = Math.max(0, box.rect.x, box.clip.x);
     const right = Math.min(this.tui.terminal.columns, box.clip.x + box.clip.width,
       box.rect.x + box.rect.width - (scroll.isScrollbarVisible ? 1 : 0));
-    for (const span of this.host.getSpans()) {
+    for (const span of this.preview ?? this.host.getSpans()) {
       const block = byKey.get(blockKey(span));
       if (!block || !matchesBlock(span, block)) continue;
       this.mapped++;
@@ -463,39 +492,23 @@ export class MarkerAdapter {
     return result;
   }
 
-  private beginDrag(): void {
-    this.drag = undefined;
-    const frame = this.tui.currentLayout;
-    const box = frame && getScrollBox(frame);
-    const selection = this.tui.getSelectionBounds();
-    // On a single press getSelectionBounds is empty; the scroll target is
-    // validated on release. Snapshot logical content so autoscroll remains safe.
-    if (selection && selection.start.scrollView !== box?.scrollView) return;
-    if (!box?.scrollContentLines || !frame || this.snapshot?.frame !== frame) return;
-    this.drag = { lines: box.scrollContentLines, width: frame.width, height: frame.height, scrollView: box.scrollView,
-      identity: snapshotIdentity(this.snapshot) };
+  private erasuresForSelection(selection: readonly MarkSpan[], snapshot: Snapshot,
+    saved: readonly MarkSpan[] = this.host.getSpans()): SpanReplacement[] {
+    const blocks = new Map(snapshot.blocks.map((block) => [blockKey(block), block]));
+    return saved.flatMap((span) => {
+      const block = blocks.get(blockKey(span));
+      if (!block || !matchesBlock(span, block)) return [];
+      const cuts = selection.filter((selected) => blockKey(selected) === blockKey(span) &&
+        selected.sourceHash === span.sourceHash && selected.displayHash === span.displayHash &&
+        selected.start < span.end && selected.end > span.start);
+      if (!cuts.length) return [];
+      return [{ span, remaining: subtractRanges(span, cuts).map((range) => spanForRange(block, range)) }];
+    });
   }
 
-  private finishDrag(): void {
-    const drag = this.drag;
-    this.drag = undefined;
-    const selection = this.tui.getSelectionBounds();
-    const frame = this.tui.currentLayout;
-    if (!drag || !selection || !frame || selection.start.scrollView !== drag.scrollView) return;
-    const box = getScrollBox(frame);
-    const lines = box?.scrollContentLines;
-    if (!lines || box?.scrollView !== drag.scrollView) return;
-    const current = this.collect(frame);
-    if (drag.width !== this.tui.terminal.columns || drag.height !== this.tui.terminal.rows ||
-        lines.length !== drag.lines.length || !lines.every((line, index) => line === drag.lines[index]) ||
-        this.snapshot?.frame !== frame || snapshotIdentity(this.snapshot) !== drag.identity || snapshotIdentity(current) !== drag.identity) {
-      this.tui.resetTextSelection();
-      this.host.report("拖选期间内容或窗口尺寸发生变化，本次未标记，请重新选择。");
-      return;
-    }
-    const snapshot = this.snapshot;
-    if (!snapshot) return;
+  private selectionSpans(snapshot: Snapshot, selection: Selection): MarkSpan[] {
     const spans: MarkSpan[] = [];
+    const lines = snapshot.box.scrollContentLines!;
     for (const block of snapshot.blocks) {
       const first = Math.max(block.top, selection.start.row);
       const last = Math.min(block.top + block.map.lines.length - 1, selection.end.row);
@@ -507,6 +520,73 @@ export class MarkerAdapter {
       const range = textRangeForCells(block.map, cells);
       if (range) spans.push(spanForRange(block, range));
     }
+    return spans;
+  }
+
+  private validDrag(drag: Drag, snapshot: Snapshot | undefined): snapshot is Snapshot {
+    const lines = snapshot?.box.scrollContentLines;
+    return !!snapshot && !!lines && snapshot.box.scrollView === drag.scrollView &&
+      drag.width === this.tui.terminal.columns && drag.height === this.tui.terminal.rows &&
+      drag.width === snapshot.frame.width && drag.height === snapshot.frame.height &&
+      lines.length === drag.lines.length && lines.every((line, index) => line === drag.lines[index]) &&
+      snapshotIdentity(snapshot) === drag.identity && this.host.getSpans() === drag.spans &&
+      this.host.getMode() === drag.mode;
+  }
+
+  private updatePreview(): void {
+    this.preview = undefined;
+    const drag = this.drag;
+    if (!drag) return;
+    if (!this.tui.selectionPressActive || this.host.getMode() === "off") { this.drag = undefined; return; }
+    const snapshot = this.snapshot;
+    if (!this.validDrag(drag, snapshot)) {
+      this.cancelSelection();
+      this.host.report("拖选期间内容、标记或窗口尺寸发生变化，本次未标记，请重新选择。");
+      return;
+    }
+    const selection = this.tui.getSelectionBounds();
+    if (!selection || selection.start.scrollView !== drag.scrollView) return;
+    const spans = this.selectionSpans(snapshot, selection);
+    if (!spans.length || spans.length > 128) return;
+    const erased = this.erasuresForSelection(spans, snapshot, drag.spans);
+    if (drag.mode !== "erase" && !erased.length) return;
+    // Always derive from the press-time snapshot, never the previous preview.
+    const replacements = new Map(erased.map(({ span, remaining }) => [span, remaining]));
+    this.preview = drag.spans.flatMap((span) => replacements.get(span) ?? [span]);
+  }
+
+  private beginDrag(): void {
+    this.drag = undefined;
+    this.preview = undefined;
+    const frame = this.tui.currentLayout;
+    const box = frame && getScrollBox(frame);
+    const selection = this.tui.getSelectionBounds();
+    // On a single press getSelectionBounds is empty; the scroll target is
+    // validated on release. Snapshot logical content so autoscroll remains safe.
+    if (selection && selection.start.scrollView !== box?.scrollView) return;
+    if (!box?.scrollContentLines || !frame || this.snapshot?.frame !== frame) return;
+    this.drag = { lines: box.scrollContentLines, width: frame.width, height: frame.height, scrollView: box.scrollView,
+      identity: snapshotIdentity(this.snapshot), spans: this.host.getSpans(), mode: this.host.getMode() };
+  }
+
+  private finishDrag(): void {
+    const drag = this.drag;
+    this.drag = undefined;
+    this.preview = undefined;
+    const selection = this.tui.getSelectionBounds();
+    const frame = this.tui.currentLayout;
+    if (!drag || !selection || !frame || selection.start.scrollView !== drag.scrollView) return;
+    const box = getScrollBox(frame);
+    const lines = box?.scrollContentLines;
+    if (!lines || box?.scrollView !== drag.scrollView) return;
+    const current = this.collect(frame);
+    if (!this.validDrag(drag, current) || this.snapshot?.frame !== frame || snapshotIdentity(this.snapshot) !== drag.identity) {
+      this.tui.resetTextSelection();
+      this.host.report("拖选期间内容、标记或窗口尺寸发生变化，本次未标记，请重新选择。");
+      return;
+    }
+    const snapshot = current;
+    const spans = this.selectionSpans(snapshot, selection);
     if (spans.length === 0) {
       this.host.report(snapshot.blocks.length === 0 && this.messages.size > 0
         ? "未识别到当前布局中的可标记回答；请执行 /marker status，并反馈是否启用了界面美化插件。"
@@ -517,7 +597,11 @@ export class MarkerAdapter {
       this.host.report("一次最多标记 128 个文本块，请分段选择。");
       return;
     }
-    if (this.host.commitSelection(spans)) this.tui.resetTextSelection();
+    const erased = this.erasuresForSelection(spans, snapshot, drag.spans);
+    const erasing = drag.mode === "erase" || erased.length > 0;
+    const committed = this.host.commitSelection(spans, erasing ? erased : undefined);
+    // A failed erasure write must restore the saved appearance too.
+    if (committed || erasing) this.tui.resetTextSelection();
     this.tui.requestRender();
   }
 
@@ -532,7 +616,8 @@ export class MarkerAdapter {
     if (matches.length !== 1) {
       throw new Error(matches.length === 0 ? "最近一条已完成回答中没有找到该文字。" : "该文字出现多次，请提供更长且唯一的片段，或用鼠标选择。");
     }
-    this.host.commitSelection(matches);
+    // Keyboard marking stays additive; explicit erase uses the same exact cuts.
+    this.host.commitSelection(matches, this.host.getMode() === "erase" ? this.erasuresForSelection(matches, snapshot!) : undefined);
     this.tui.requestRender();
   }
 
@@ -577,6 +662,7 @@ export class MarkerAdapter {
 
   cancelSelection(): void {
     this.drag = undefined;
+    this.preview = undefined;
     this.tui.resetTextSelection();
     this.tui.requestRender();
   }
@@ -585,6 +671,7 @@ export class MarkerAdapter {
     if (this.disposed) return;
     this.disposed = true;
     this.drag = undefined;
+    this.preview = undefined;
     for (const restore of this.restore.reverse()) restore();
     if (this.tui[ATTACHED] === this) delete this.tui[ATTACHED];
     this.tui.requestRender();

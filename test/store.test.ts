@@ -54,6 +54,36 @@ test("saved operations survive reopening, honor branches, and never change model
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
+test("span replacement preserves untouched spans, deletes empty groups and undoes atomically", () => {
+  const store = new MarkerStore();
+  const untouched = { ...mark, blockIndex: 1 };
+  const first = { ...mark, start: 0, end: 10 };
+  const second = { ...mark, start: 3, end: 6 };
+  store.apply({ version: 1, kind: "add", group: { id: "first", spans: [first, untouched] } });
+  store.apply({ version: 1, kind: "add", group: { id: "second", spans: [second] } });
+  const before = store.groups;
+  const remaining = [{ ...first, end: 3, rangeHash: hashText("abc") }, { ...first, start: 6, rangeHash: hashText("ghij") }];
+  const operation = store.replaceSpans([{ span: first, remaining }, { span: second, remaining: [] }]);
+  assert.deepEqual(parseOperation(operation), operation);
+  assert.equal(store.groups, before, "planning must not mutate saved state");
+  store.apply(operation);
+  assert.deepEqual(store.groups, [{ id: "first", spans: [...remaining, untouched] }]);
+  store.apply({ version: 1, kind: "undo" });
+  assert.equal(store.groups, before);
+  assert.equal(store.wouldChange(store.replaceSpans([])), false);
+});
+
+test("replacement parsing accepts fragmented strokes beyond the block limit and rejects malformed edits", () => {
+  const groups = [{ id: "fragmented", spans: Array.from({ length: 130 }, (_, index) => ({ ...mark, start: index * 2, end: index * 2 + 1 })) }];
+  const operation = { version: 1 as const, kind: "replace" as const, groups };
+  assert.deepEqual(parseOperation(operation), operation);
+  assert.equal(parseOperation({ ...operation, groups: [] }), undefined);
+  assert.equal(parseOperation({ ...operation, groups: [groups[0], groups[0]] }), undefined);
+  assert.equal(parseOperation({ ...operation, groups: [{ id: "bad", spans: [{ ...mark, rangeHash: "bad" }] }] }), undefined);
+  assert.deepEqual(parseOperation({ ...operation, groups: [{ id: "empty", spans: [] }] }),
+    { ...operation, groups: [{ id: "empty", spans: [] }] });
+});
+
 test("malformed and future-version data is rejected rather than rendered", () => {
   assert.equal(parseOperation(null), undefined);
   assert.equal(parseOperation({ version: 2, kind: "clear" }), undefined);

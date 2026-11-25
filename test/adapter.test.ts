@@ -132,6 +132,8 @@ test("dispose restores exact original methods and removes decorations", () => {
     h.adapter.dispose();
     assert.equal(Object.hasOwn(h.tui, "applySearchHighlights"), false);
     assert.equal(Object.hasOwn(h.tui, "handleSelectionMouseEvent"), false);
+    assert.equal(Object.hasOwn(h.tui, "applySelection"), false);
+    assert.equal(Object.hasOwn(h.tui, "handleViewportInput"), false);
     h.tui.renderNow();
     assert.equal(highlightedText(h.tui.getScreenLines()), "");
     h.drag("world");
@@ -146,6 +148,28 @@ test("keyboard fallback requires an unambiguous literal in the latest answer", (
     h.adapter.markText("unique phrase");
     h.tui.renderNow();
     assert.equal(highlightedText(h.tui.getScreenLines()), "unique phrase");
+  } finally { h.close(); }
+});
+
+test("Escape cancels an owned drag even when native transcript search consumes the key", () => {
+  const h = harness();
+  try {
+    h.drag("marker");
+    const saved = h.spans;
+    const { row, start, end } = h.locate("arke");
+    h.mouse(0, start, row);
+    h.mouse(32, end, row);
+    assert.equal(highlightedText(h.tui.getScreenLines()), "mr");
+    h.terminal.send("\x1b[102;6u"); // Ctrl+Shift+F opens native transcript search.
+    h.tui.renderNow();
+    assert.equal(h.tui.hasOverlay(), true);
+    h.terminal.send("\x1b");
+    h.tui.renderNow();
+    assert.equal(h.tui.hasOverlay(), false);
+    assert.equal(h.tui.hasActiveSelection(), false);
+    h.mouse(0, end, row, true);
+    assert.equal(h.spans, saved);
+    assert.equal(highlightedText(h.tui.getScreenLines()), "marker");
   } finally { h.close(); }
 });
 

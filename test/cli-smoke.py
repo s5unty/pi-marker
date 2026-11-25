@@ -118,7 +118,30 @@ try:
     send(f'/marker export "{restored_path}"\r')
     pump_until(restored_path.exists)
     assert restored_path.read_text() == expected, "Reloaded marks must still export in off mode"
-    print("PASS: actual CLI mouse marks, exact Markdown file export" + (", isolated OSC52 clipboard" if verify_clipboard else "") + ", and /reload")
+    # Re-select the middle of the saved stroke in mark mode. Probe before
+    # release to distinguish a live preview from an on-release-only eraser.
+    send("/marker on\r")
+    metadata = snapshot()
+    location = metadata["fixtureLocation"]
+    row = location["row"] + 1
+    start, end = location["start"] + 3, location["end"] - 3
+    before_erase = session.read_text()
+    send(f"\x1b[<0;{start};{row}M\x1b[<32;{end};{row}M")
+    preview = snapshot()
+    assert preview["yellowText"] == "marget", "Partial erasure must be visible before release"
+    assert session.read_text() == before_erase, "Preview must not append session operations"
+    send(f"\x1b[<0;{end};{row}m")
+    pump_until(lambda: session.read_text() != before_erase)
+    assert snapshot()["yellowText"] == "marget", "Release must keep the split highlight"
+    operation = json.loads(session.read_text().splitlines()[-1])
+    assert operation["data"]["kind"] == "replace", "One atomic replacement must persist the erasure"
+    offset = len(output)
+    send("/reload\r")
+    pump_until(lambda: b"Reloaded" in output[offset:], 10)
+    assert snapshot()["yellowText"] == "marget", "Split anchors must survive CLI reload"
+    send("/marker undo\r")
+    assert snapshot()["yellowText"] == "marker target", "One undo must restore the complete original stroke"
+    print("PASS: actual CLI mouse marks, exact Markdown file export" + (", isolated OSC52 clipboard" if verify_clipboard else "") + ", live partial erasure, /reload and undo")
     succeeded = True
 finally:
     if process.poll() is None:

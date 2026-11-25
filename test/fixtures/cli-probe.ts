@@ -27,6 +27,8 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       const path = process.env.PI_MARKER_PROBE_FILE;
       if (!path || !tui) throw new Error("Probe requires PI_MARKER_PROBE_FILE and a TUI");
+      // Flush the previous command's coalesced render before inspecting pixels.
+      tui.renderNow();
       const raw = tui as unknown as { currentLayout?: { root: Box }; getScreenLines(): string[] };
       const nodes: object[] = [];
       const visitComponent = (component: TreeComponent, depth: number) => {

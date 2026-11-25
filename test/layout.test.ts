@@ -48,6 +48,37 @@ test("auto-scrolling a drag uses document coordinates, not old viewport rows", (
   } finally { h.close(); }
 });
 
+test("auto-scrolling erasure previews and commits document ranges without touching the remaining tail", () => {
+  const text = Array.from({ length: 40 }, (_, index) => `Line ${String(index).padStart(2, "0")} marker words`).join("\n\n");
+  const h = harness([assistantEntry(text)]);
+  try {
+    h.adapter.markText(text);
+    const saved = h.spans;
+    h.scroll.scrollToStart();
+    h.tui.renderNow();
+    const start = h.locate("Line 00");
+    h.mouse(0, start.start, start.row);
+    const edge = h.terminal.rows - 2;
+    h.mouse(32, 10, edge);
+    const native = h.tui as unknown as { autoScrollSelection(): void };
+    for (let index = 0; index < 5; index++) { native.autoScrollSelection(); h.tui.renderNow(); }
+    assert.ok(h.scroll.scrollTop > 0);
+    assert.equal(h.spans, saved, "autoscroll only changes the preview");
+    assert.ok(!h.tui.getScreenLines().some((line) => line.includes("\x1b[7m")));
+    h.mouse(0, 10, edge, true);
+    assert.equal(h.spans.length, 1);
+    assert.ok(h.spans[0].start > 100);
+    assert.equal(h.spans[0].end, saved[0].end);
+    h.scroll.scrollToStart();
+    h.tui.renderNow();
+    assert.ok(!highlightedText(h.tui.getScreenLines()).includes("Line 00"));
+    h.scroll.scrollToEnd();
+    h.tui.renderNow();
+    assert.ok(highlightedText(h.tui.getScreenLines()).includes("Line 39"));
+    assert.deepEqual(h.reports, []);
+  } finally { h.close(); }
+});
+
 test("nonzero transcript origins and visible scrollbars do not shift highlights", () => {
   const h = harness();
   try {
