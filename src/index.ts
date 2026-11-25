@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { copyToClipboard, VERSION, type ExtensionAPI, type ExtensionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { MarkerAdapter, resolveRenderer, TESTED_PI_VERSION } from "./pi-adapter.ts";
+import { getPiVersionError, MarkerAdapter, resolveRenderer } from "./pi-adapter.ts";
 import { ENTRY_TYPE, MarkerStore, type MarkerOperation } from "./store.ts";
 import type { MarkSpan, MarkerMode, SpanReplacement } from "./types.ts";
 import { formatHighlights } from "./markdown-export.ts";
@@ -101,8 +101,9 @@ export default function markerExtension(pi: ExtensionAPI, services: MarkerServic
       status();
       return;
     }
-    if (VERSION !== TESTED_PI_VERSION) {
-      unavailable = `pi-marker 仅验证过 Pi ${TESTED_PI_VERSION}；当前为 ${VERSION}。未安装任何私有接口钩子。`;
+    const versionError = getPiVersionError(VERSION);
+    if (versionError) {
+      unavailable = versionError;
       status();
       return;
     }

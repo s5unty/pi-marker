@@ -1,0 +1,74 @@
+{
+  "piVersion": "1.5.2",
+  "source": "Before **alpha beta gamma** and *中文测试* after.",
+  "entryId": "legacy-assistant",
+  "operations": [
+    {
+      "version": 1,
+      "kind": "add",
+      "group": {
+        "id": "legacy-stroke",
+        "spans": [
+          {
+            "entryId": "legacy-assistant",
+            "blockIndex": 0,
+            "sourceHash": "bceb7338239943b9c8f744cfa6e9fa1373e65bfd62fc4d38f4a084e4e80672f6",
+            "displayHash": "ebf6e2d08b1cfeb0a395dc668c3087aa67157665def88a9e3e28af333572c57d",
+            "start": 6,
+            "end": 20,
+            "rangeHash": "c04a9408aace4db24979fa5cd28ad7aa454d7b97a30e9eb561387e7b53c33abc"
+          },
+          {
+            "entryId": "legacy-assistant",
+            "blockIndex": 0,
+            "sourceHash": "bceb7338239943b9c8f744cfa6e9fa1373e65bfd62fc4d38f4a084e4e80672f6",
+            "displayHash": "ebf6e2d08b1cfeb0a395dc668c3087aa67157665def88a9e3e28af333572c57d",
+            "start": 23,
+            "end": 27,
+            "rangeHash": "e350545d18735c5dd2dec50dcb971f3eb4cdda24b95a79bdb6b553f6a01ceb87"
+          }
+        ]
+      }
+    },
+    {
+      "version": 1,
+      "kind": "replace",
+      "groups": [
+        {
+          "id": "legacy-stroke",
+          "spans": [
+            {
+              "entryId": "legacy-assistant",
+              "blockIndex": 0,
+              "sourceHash": "bceb7338239943b9c8f744cfa6e9fa1373e65bfd62fc4d38f4a084e4e80672f6",
+              "displayHash": "ebf6e2d08b1cfeb0a395dc668c3087aa67157665def88a9e3e28af333572c57d",
+              "start": 6,
+              "end": 11,
+              "rangeHash": "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+            },
+            {
+              "entryId": "legacy-assistant",
+              "blockIndex": 0,
+              "sourceHash": "bceb7338239943b9c8f744cfa6e9fa1373e65bfd62fc4d38f4a084e4e80672f6",
+              "displayHash": "ebf6e2d08b1cfeb0a395dc668c3087aa67157665def88a9e3e28af333572c57d",
+              "start": 15,
+              "end": 20,
+              "rangeHash": "be9d587defa1f0c09ef49eb17e206983a5f8f8289e4281860bd0ee5a19592c67"
+            },
+            {
+              "entryId": "legacy-assistant",
+              "blockIndex": 0,
+              "sourceHash": "bceb7338239943b9c8f744cfa6e9fa1373e65bfd62fc4d38f4a084e4e80672f6",
+              "displayHash": "ebf6e2d08b1cfeb0a395dc668c3087aa67157665def88a9e3e28af333572c57d",
+              "start": 23,
+              "end": 27,
+              "rangeHash": "e350545d18735c5dd2dec50dcb971f3eb4cdda24b95a79bdb6b553f6a01ceb87"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "expectedText": "alphagamma中文测试",
+  "expectedMarkdown": "**alpha**\n\n---\n\n**gamma**\n\n---\n\n*中文测试*\n"
+}

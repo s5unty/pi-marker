@@ -87,6 +87,9 @@ try:
     send("/marker on\r")
     pump_until(lambda: b"marker:mark" in output)
     metadata = snapshot()
+    expected_version = os.environ.get("PI_MARKER_TEST_EXPECT_VERSION")
+    if expected_version:
+        assert metadata["version"] == expected_version, f"Wrong CLI host: expected {expected_version}, got {metadata['version']}"
     location = metadata["fixtureLocation"]
     assert location is not None, "Synthetic answer is not visible"
     row = location["row"] + 1
@@ -141,7 +144,7 @@ try:
     assert snapshot()["yellowText"] == "marget", "Split anchors must survive CLI reload"
     send("/marker undo\r")
     assert snapshot()["yellowText"] == "marker target", "One undo must restore the complete original stroke"
-    print("PASS: actual CLI mouse marks, exact Markdown file export" + (", isolated OSC52 clipboard" if verify_clipboard else "") + ", live partial erasure, /reload and undo")
+    print(f"PASS: Pi {metadata['version']} actual CLI mouse marks, exact Markdown file export" + (", isolated OSC52 clipboard" if verify_clipboard else "") + ", live partial erasure, /reload and undo")
     succeeded = True
 finally:
     if process.poll() is None:

@@ -4,9 +4,16 @@ import { buildTextMap, cellsForTextRange, findTextRanges, hashText, paintLine, q
 import type { MarkSpan, MarkerMode, SpanReplacement } from "./types.ts";
 import type { MarkdownEvidence, MarkdownSelection } from "./markdown-export.ts";
 
-export const TESTED_PI_VERSION = "1.5.2";
+export const TESTED_PI_VERSIONS: readonly string[] = ["1.5.2", "1.6.0"];
+
+/** Private hooks are opt-in per verified release, not a public Pi requirement. */
+export function getPiVersionError(version: string): string | undefined {
+  if (TESTED_PI_VERSIONS.includes(version)) return undefined;
+  return `pi-marker 仅验证过 Pi ${TESTED_PI_VERSIONS.join("、")}；当前为 ${version}。未安装任何私有接口钩子，请升级 pi-marker 后重试。`;
+}
+
 const ATTACHED = Symbol.for("pi-marker.adapter.v1");
-// pi-tidy 0.9.8 renders a separate presentation tree, sometimes without ever
+// pi-tidy renders a separate presentation tree, sometimes without ever
 // rendering Pi's original containers. Read its last-frame geometry, not config.
 const TIDY_VIEW = Symbol.for("pi-toolbox:message-view");
 const TIDY_TURN = Symbol.for("pi-tidy:turn-layout");
@@ -23,11 +30,17 @@ interface LayoutBox {
   clip: Rect;
   children: LayoutBox[];
   scrollView?: ScrollState;
-  scrollContentLines?: string[];
+  scrollContentLines?: readonly string[];
 }
 interface Frame { root: LayoutBox; width: number; height: number; primaryScrollView?: ScrollState }
-interface MouseLayout { width: number; children: { component: Component; height: number }[] }
-interface ContainerInternals { mouseLayout?: MouseLayout }
+interface MouseLayout { width: number; children: readonly { component: Component; height: number }[] }
+interface ChildLines {
+  width: number;
+  children: readonly Component[];
+  parts: readonly (readonly string[])[];
+  lines: readonly string[];
+}
+interface ContainerInternals { mouseLayout?: MouseLayout; childLines?: ChildLines }
 type AssistantMessage = Extract<SessionEntry, { type: "message" }>["message"] & { role: "assistant" };
 interface AssistantInternals {
   contentContainer: Container;
@@ -47,8 +60,8 @@ interface PrivateTui {
   handleSelectionMouseEvent(event: MouseInput): void;
   getSelectionBounds(): Selection | undefined;
   getSelectionColumns(line: string, row: number, selection: Selection): { start: number; end: number };
-  applySearchHighlights(screen: string[], frame: Frame): string[];
-  applySelection(screen: string[], frame?: Frame): string[];
+  applySearchHighlights(screen: readonly string[], frame: Frame): readonly string[];
+  applySelection(screen: readonly string[], frame?: Frame): readonly string[];
   handleViewportInput(data: string): { consume: true } | undefined;
   getCopyOnSelect(): boolean;
   setCopyOnSelect(enabled: boolean): void;
@@ -119,25 +132,46 @@ function getScrollBox(frame: Frame): LayoutBox | undefined {
   return frame.primaryScrollView ? visit(frame.root) : undefined;
 }
 
-function layoutOf(component: Component, width: number): MouseLayout | undefined {
-  const layout = (component as unknown as ContainerInternals).mouseLayout;
-  return layout?.width === width ? layout : undefined;
+function layoutOf(component: Component, width?: number): MouseLayout | undefined {
+  const raw = component as unknown as ContainerInternals;
+  let layout: MouseLayout | undefined;
+  if (raw.childLines !== undefined) {
+    // Pi 1.6.0 caches each child's immutable render output instead of heights.
+    // Read the last frame only: re-rendering here could change layout/caches.
+    const cached = raw.childLines;
+    if (!cached || !Array.isArray(cached.children) || !Array.isArray(cached.parts) ||
+        !Array.isArray(cached.lines) || cached.children.length !== cached.parts.length ||
+        cached.parts.some((part) => !Array.isArray(part)) ||
+        cached.parts.reduce((sum, part) => sum + part.length, 0) !== cached.lines.length) return undefined;
+    layout = { width: cached.width, children: cached.children.map((child, index) => ({ component: child, height: cached.parts[index].length })) };
+  } else {
+    // Pi 1.5.2 (including pi-tidy's native presentation Container).
+    layout = raw.mouseLayout;
+  }
+  if (!layout || !Number.isSafeInteger(layout.width) || layout.width < 1 ||
+      (width !== undefined && layout.width !== width) || !Array.isArray(layout.children) ||
+      layout.children.some((child) => !child || typeof child.component?.render !== "function" ||
+        !Number.isSafeInteger(child.height) || child.height < 0)) return undefined;
+  return layout;
 }
 
 /** Locate text children by component identity in the tree that actually drew them. */
-function assistantLayout(component: Component, assistant: AssistantInternals, width: number):
+function assistantLayout(component: Component, assistant: AssistantInternals, width: number, height: number):
   { width: number; top: number; children: MouseLayout["children"]; wrapped: boolean } | undefined {
   const view = assistant[TIDY_VIEW];
   if (view) {
-    const layout = view.mouseLayout;
+    const layout = layoutOf(view);
     const turn = assistant[TIDY_TURN];
     if (!Container.prototype.isPrototypeOf(view) || !layout || !Number.isSafeInteger(layout.width) ||
         layout.width < 1 || layout.width > width || !Number.isSafeInteger(view.trimTop) ||
         view.trimTop < 0 || view.trimTop > view.rawHeight || !Number.isSafeInteger(view.rawHeight) ||
         !Array.isArray(layout.children) || layout.children.some((child) => !Number.isSafeInteger(child.height) || child.height < 0) ||
         layout.children.reduce((sum, child) => sum + child.height, 0) !== view.rawHeight) return undefined;
+    // pi-tidy 0.11 adds inter-message gaps and frame padding. Trust its measured
+    // bodyTop within the actual message, not an assumed header-to-body distance;
+    // projectMap still verifies every visible glyph at the resulting position.
     if (turn && (typeof turn.header !== "boolean" || !Number.isSafeInteger(turn.bodyTop) ||
-        ![0, 1].includes(turn.bodyTop - Number(turn.header)) || ![0, 1].includes(turn.chipShift))) return undefined;
+        turn.bodyTop < Number(turn.header) || turn.bodyTop >= height || ![0, 1, 2].includes(turn.chipShift))) return undefined;
     return { width: layout.width, top: (turn?.bodyTop ?? 0) - view.trimTop, children: layout.children, wrapped: true };
   }
   const outer = layoutOf(component, width);
@@ -182,7 +216,7 @@ function markdownEvidence(component: Component, source: string, expected: TextMa
     cachedWidth?: number;
     cachedTokens?: WeakRef<{ source: string; tokens: Token[] }>;
     options?: { preserveOrderedListMarkers?: boolean };
-    renderToken(token: Token, ...args: unknown[]): string[];
+    renderToken(token: Token, ...args: unknown[]): readonly string[];
     renderInlineTokens(tokens: Token[]): string;
   };
   const width = raw.cachedWidth;
@@ -266,9 +300,8 @@ export class MarkerAdapter {
   private mapped = 0;
 
   constructor(renderer: object, host: AdapterHost) {
-    if (host.version !== TESTED_PI_VERSION) {
-      throw new Error(`pi-marker 仅验证过 Pi ${TESTED_PI_VERSION}；当前为 ${host.version}，已禁用私有接口适配。`);
-    }
+    const versionError = getPiVersionError(host.version);
+    if (versionError) throw new Error(versionError);
     const tui = renderer as PrivateTui;
     if (tui.mode !== "fullscreen") throw new Error("pi-marker 需要 Fullscreen 模式。");
     for (const name of ["handleSelectionMouseEvent", "getSelectionBounds", "getSelectionColumns", "applySearchHighlights", "applySelection", "handleViewportInput", "getCopyOnSelect", "setCopyOnSelect", "resetTextSelection", "requestRender"] as const) {
@@ -387,7 +420,7 @@ export class MarkerAdapter {
     if (component.messageId && this.messages.has(component.messageId)) return component.messageId;
     const identity = this.identities.get(message);
     if (identity) return identity;
-    // Live finalized components have no messageId in Pi 1.5.2. Only a unique
+    // Live finalized components can have no messageId. Only a unique
     // timestamp + content signature is acceptable; never search text globally.
     const matches = this.signatures.get(this.messageKey(message));
     return matches?.length === 1 ? matches[0] : undefined;
@@ -413,7 +446,7 @@ export class MarkerAdapter {
         const texts = message.content.flatMap((part, index) => part.type === "text" && part.text.trim() ? [{ index, text: part.text }] : []);
         const slots = assistant.markdownSlots.filter((slot) => slot.kind === "text");
         if (texts.length !== slots.length) return;
-        const layout = assistantLayout(component, assistant, width);
+        const layout = assistantLayout(component, assistant, width, height);
         if (!layout) return;
         if (layout.wrapped) tidyMessages++;
         let contentTop = top + layout.top;
@@ -458,7 +491,7 @@ export class MarkerAdapter {
     return { frame, box, blocks, tidyMessages };
   }
 
-  private paint(screen: string[]): string[] {
+  private paint(screen: readonly string[]): readonly string[] {
     this.mapped = 0;
     const snapshot = this.snapshot;
     if (!snapshot) return screen;

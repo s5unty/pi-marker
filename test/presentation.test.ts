@@ -6,7 +6,7 @@ import { assistantEntry, harness, highlightedText } from "./helpers.ts";
 const VIEW = Symbol.for("pi-toolbox:message-view");
 const TURN = Symbol.for("pi-tidy:turn-layout");
 
-/** Model pi-tidy 0.9.8's identity-preserving, trimmed presentation tree.
+/** Model pi-tidy's identity-preserving, trimmed presentation tree.
  * Real pi-tidy is exercised separately by test/cli-smoke.py.
  */
 class Presentation extends Container {
@@ -25,12 +25,15 @@ class Presentation extends Container {
 
 function present(component: Component) {
   const state = { style: "frame", header: false, hidden: false, hideThinking: true, invalid: false,
+    runGap: 0, stepGap: 0, padding: 0, chipShift: undefined as number | undefined,
     transform: (line: string) => line, renders: 0 };
-  const raw = component as unknown as { mouseLayout?: unknown; contentContainer: { children: Component[] };
+  const raw = component as unknown as { mouseLayout?: unknown; childLines?: unknown; contentContainer: { children: Component[] };
     [VIEW]?: Presentation; [TURN]?: { header: boolean; bodyTop: number; chipShift: number } };
   // No native render cache, as when pi-tidy renders a restored final answer.
   delete raw.mouseLayout;
+  delete raw.childLines;
   Reflect.deleteProperty(raw.contentContainer, "mouseLayout");
+  Reflect.deleteProperty(raw.contentContainer, "childLines");
   component.render = (width) => {
     if (state.hidden) return []; // Deliberately retain stale caches.
     const framed = ["frame", "rail", "rules"].includes(state.style);
@@ -46,12 +49,18 @@ function present(component: Component) {
     }
     const body = view.render(innerWidth);
     raw[VIEW] = view;
-    raw[TURN] = { header: state.header, bodyTop: Number(state.header) + Number(framed), chipShift: framed && state.style !== "rules" ? 1 : 0 };
+    raw[TURN] = { header: state.header,
+      bodyTop: state.runGap + Number(state.header) + state.stepGap + Number(framed) + state.padding,
+      chipShift: state.chipShift ?? (framed && state.style !== "rules" ? 1 : 0) };
     if (state.invalid) view.trimTop = -1;
     return [
+      ...Array<string>(state.runGap).fill(""),
       ...(state.header ? ["▾ turn summary"] : []),
+      ...Array<string>(state.stepGap).fill(""),
       ...(framed ? ["╭─ fixture reply ─╮"] : []),
+      ...Array<string>(state.padding).fill("│"),
       ...body.map((line) => state.transform(state.style === "rules" ? line : `│${line}${state.style === "frame" ? "│" : ""}`)),
+      ...Array<string>(state.padding).fill("│"),
       ...(framed ? ["╰────────────────╯"] : []),
     ];
   };
@@ -79,6 +88,30 @@ for (const style of ["frame", "rail", "rules", "process-rail"]) {
       h.tui.renderNow();
       assert.equal(h.adapter.diagnostics.mapped, 3);
       assert.equal(highlightedText(h.tui.getScreenLines()).replaceAll(" ", ""), "markertarget中文👩🏽‍💻");
+    } finally { h.close(); }
+  });
+}
+
+for (const style of ["frame", "rail", "rules", "process-rail"]) {
+  test(`pi-tidy ${style}: measured gaps and frame padding do not shift marks`, () => {
+    const h = harness([assistantEntry("Hello marker target 中文.")]);
+    try {
+      const state = present(h.components[0]);
+      Object.assign(state, { style, header: true, runGap: 2, stepGap: 1,
+        padding: style === "frame" ? 1 : 0, chipShift: ["rail", "rules"].includes(style) ? 2 : 1 });
+      h.tui.renderNow();
+      h.drag("marker target");
+      assert.equal(highlightedText(h.tui.getScreenLines()), "marker target");
+      assert.equal(h.adapter.diagnostics.tidyMessages, 1);
+      h.terminal.resize(32, 24);
+      h.tui.renderNow();
+      assert.equal(highlightedText(h.tui.getScreenLines()), "marker target");
+      assert.deepEqual(h.reports, []);
+      // Impossible metadata must still fail closed, without a native fallback.
+      const turn = (h.components[0] as unknown as { [TURN]: { bodyTop: number } })[TURN];
+      turn.bodyTop = 10_000;
+      assert.throws(() => h.adapter.markText("中文"), /没有找到/);
+      assert.throws(() => h.adapter.exportSelections(), /无法精确还原/);
     } finally { h.close(); }
   });
 }

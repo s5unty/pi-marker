@@ -1,11 +1,11 @@
 {
   "name": "pi-marker",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "description": "Persistent mouse highlighter with Markdown file and clipboard export for Pi",
   "type": "module",
   "keywords": ["pi-package"],
-  "engines": { "node": ">=22.18.0" },
+  "engines": { "node": ">=22.19.0" },
   "pi": { "extensions": ["./src/index.ts"] },
   "files": ["src", "README.md"],
   "scripts": {
@@ -19,8 +19,8 @@
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "1.5.2",
-    "@earendil-works/pi-tui": "1.5.2",
+    "@earendil-works/pi-coding-agent": "1.6.0",
+    "@earendil-works/pi-tui": "1.6.0",
     "@types/node": "^24.0.0",
     "typescript": "^5.9.3"
   }

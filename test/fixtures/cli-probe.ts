@@ -5,13 +5,14 @@ import { Container, stripTerminalSequences, visibleWidth, type TUI } from "@eare
 interface TreeComponent {
   constructor: { name: string };
   children?: TreeComponent[];
-  mouseLayout?: { width: number; children: { height: number }[] };
+  mouseLayout?: { width: number };
+  childLines?: { width: number };
   lastMessage?: { role: string };
   isStreaming?: boolean;
   messageId?: string;
   markdownSlots?: { kind: string }[];
 }
-interface Box { component: TreeComponent; children: Box[]; scrollContentLines?: string[]; rect: object }
+interface Box { component: TreeComponent; children: Box[]; scrollContentLines?: readonly string[]; rect: object }
 
 /** Test-only metadata probe for an isolated synthetic CLI session. No message contents are dumped. */
 export default function (pi: ExtensionAPI) {
@@ -29,14 +30,15 @@ export default function (pi: ExtensionAPI) {
       if (!path || !tui) throw new Error("Probe requires PI_MARKER_PROBE_FILE and a TUI");
       // Flush the previous command's coalesced render before inspecting pixels.
       tui.renderNow();
-      const raw = tui as unknown as { currentLayout?: { root: Box }; getScreenLines(): string[] };
+      const raw = tui as unknown as { currentLayout?: { root: Box }; getScreenLines(): readonly string[] };
       const nodes: object[] = [];
       const visitComponent = (component: TreeComponent, depth: number) => {
         if (depth > 8 || nodes.length >= 80) return;
         nodes.push({ depth, name: component.constructor.name,
           isAssistant: component instanceof AssistantMessageComponent,
           isPlainContainer: Object.getPrototypeOf(component) === Container.prototype,
-          mouseWidth: component.mouseLayout?.width,
+          layoutKind: component.childLines ? "childLines" : component.mouseLayout ? "mouseLayout" : undefined,
+          layoutWidth: component.childLines?.width ?? component.mouseLayout?.width,
           children: component.children?.length,
           role: component.lastMessage?.role, streaming: component.isStreaming,
           hasId: !!component.messageId, slots: component.markdownSlots?.map((slot) => slot.kind) });
