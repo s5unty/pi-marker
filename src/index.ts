@@ -7,7 +7,7 @@ import type { MarkSpan, MarkerMode, SpanReplacement } from "./types.ts";
 import { formatHighlights } from "./markdown-export.ts";
 import { parseExportDestination, saveMarkdown } from "./export-output.ts";
 
-const HELP = "/marker [on|off|erase|undo|clear|status|copy]；/marker text <唯一片段>；/marker export [路径]";
+const HELP = "/marker（开关）｜/marker [on|off|erase|undo|clear|status|copy]；/marker text <唯一片段>；/marker export [路径]";
 
 export interface MarkerServices { copyToClipboard(text: string): Promise<void> }
 
@@ -46,9 +46,7 @@ export default function markerExtension(pi: ExtensionAPI, services: MarkerServic
 
   const status = () => {
     if (!alive || !context || context.mode !== "tui") return;
-    const count = store.groups.length;
-    const value = mode === "off" && count === 0 ? undefined :
-      context.ui.theme.fg(mode === "off" ? "dim" : "accent", `marker:${mode} · ${count}笔${unavailable ? " (暂停)" : ""}`);
+    const value = mode === "off" ? undefined : context.ui.theme.fg("accent", `marker: ${store.groups.length}`);
     if (value === lastStatus) return;
     lastStatus = value;
     context.ui.setStatus("pi-marker", value);
@@ -126,8 +124,8 @@ export default function markerExtension(pi: ExtensionAPI, services: MarkerServic
   };
 
   const setMode = (next: MarkerMode) => {
-    const current = requireAdapter();
-    current.cancelSelection();
+    if (next === "off") adapter?.cancelSelection();
+    else requireAdapter().cancelSelection();
     mode = next;
     if (next !== "off") warnIfEphemeral();
     status();
@@ -185,7 +183,7 @@ export default function markerExtension(pi: ExtensionAPI, services: MarkerServic
   });
 
   pi.registerCommand("marker", {
-    description: "荧光笔：鼠标标记 AI 回答；on/off/erase/undo/clear/status/text/export/copy",
+    description: "切换荧光笔；on/off/erase/undo/clear/status/text/export/copy",
     getArgumentCompletions: (prefix) => ["on", "off", "erase", "undo", "clear", "status", "text", "export", "copy", "help"]
       .filter((value) => value.startsWith(prefix)).map((value) => ({ value, label: value })),
     handler: async (args, ctx) => {
@@ -214,17 +212,13 @@ export default function markerExtension(pi: ExtensionAPI, services: MarkerServic
         if (action === "text") {
           const text = input.slice(4).trim();
           if (!text) throw new Error("用法：/marker text <最近回答中唯一的文字片段>");
-          const current = requireAdapter();
-          const previous = mode;
-          if (mode === "off") mode = "mark";
-          try { current.markText(text); }
-          finally { mode = previous; status(); }
+          requireAdapter().markText(text);
           return;
         }
         if (input !== action) throw new Error(HELP);
         switch (action) {
           case "on": setMode("mark"); break;
-          case "off": mode = "off"; adapter?.cancelSelection(); status(); break;
+          case "off": setMode("off"); break;
           case "erase": setMode("erase"); break;
           case "undo":
             if (!store.canUndo) ctx.ui.notify("没有可撤销的标记操作。", "info");
@@ -243,12 +237,10 @@ export default function markerExtension(pi: ExtensionAPI, services: MarkerServic
           case "status": {
             ensureAdapter();
             const info = adapter?.diagnostics;
-            const adapterStatus = unavailable ?? (info?.failed ? "适配器已停用，请 /reload。" :
-              info ? "私有接口适配已启用。" : "TUI 尚未准备好。");
-            ctx.ui.notify(`marker:${mode}；${store.groups.length} 笔 / ${store.spans.length} 段；${info?.mapped ?? 0} 段已匹配当前文档。\n` +
-              `会话 AI 消息 ${info?.messages ?? 0}；可标记文本块 ${info?.indexed ?? 0}；pi-tidy 布局 ${info?.tidyMessages ?? 0} 条。\n` +
-              `Pi ${VERSION}：${adapterStatus}` +
-              "\n未匹配的标记会保留记录但不绘制，不猜测位置。", "info");
+            const problem = unavailable ?? (info?.failed ? "适配器已停用，请 /reload。" :
+              info ? undefined : "TUI 尚未准备好。");
+            const summary = `marker: ${mode} · ${store.groups.length} 笔 · ${info?.mapped ?? 0}/${store.spans.length} 段已匹配`;
+            ctx.ui.notify(problem ? `${summary} · Pi ${VERSION}：${problem.replace(/\s+/g, " ").trim()}` : summary, "info");
             break;
           }
           case "help": ctx.ui.notify(HELP + "\n开启后拖选：碰到高亮只擦除交集，无交集则新增；拖动实时预览，松手保存，Esc 取消。erase 始终局部擦除；off 恢复普通复制。\nexport 将当前分支的全部高亮保存为 Markdown 文件，不覆盖已有文件；copy 将相同内容复制到剪贴板。", "info"); break;

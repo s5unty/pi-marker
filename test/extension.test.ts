@@ -147,8 +147,9 @@ test("full extension mouse marks persist and render after session reopen", async
   try {
     const originalContext = s.manager.buildSessionProjection().messages;
     await f.command("on");
-    assert.match(f.statuses.get("pi-marker")!, /marker:mark/);
+    assert.equal(f.statuses.get("pi-marker"), "marker: 0");
     f.drag("this phrase");
+    assert.equal(f.statuses.get("pi-marker"), "marker: 1");
     assert.equal(highlightedText(f.tui.getScreenLines()), "this phrase");
     assert.ok(s.manager.getBranch().some((entry) => entry.type === "custom" && entry.customType === ENTRY_TYPE));
     assert.deepEqual(s.manager.buildSessionProjection().messages, originalContext);
@@ -156,9 +157,39 @@ test("full extension mouse marks persist and render after session reopen", async
     const reopened = SessionManager.open(s.manager.getSessionFile()!, s.directory);
     f = extensionFixture(reopened);
     assert.equal(highlightedText(f.tui.getScreenLines()), "this phrase");
-    assert.match(f.statuses.get("pi-marker")!, /marker:off/);
+    assert.equal(f.statuses.has("pi-marker"), false);
     await f.command("undo");
     assert.equal(highlightedText(f.tui.getScreenLines()), "");
+  } finally { f.close(); s.clean(); }
+});
+
+test("bare marker toggles marking and hides the status bar when off without losing marks", async () => {
+  const s = session();
+  const f = extensionFixture(s.manager);
+  try {
+    assert.equal(f.statuses.has("pi-marker"), false);
+    await f.command("");
+    assert.equal(f.statuses.get("pi-marker"), "marker: 0");
+    f.drag("this phrase");
+    await f.command("status");
+    assert.equal(f.notifications.at(-1), "marker: mark · 1 笔 · 1/1 段已匹配");
+    await f.command("");
+    assert.equal(f.statuses.has("pi-marker"), false);
+    const leaf = s.manager.getLeafId();
+    f.drag("中文测试");
+    assert.equal(s.manager.getLeafId(), leaf, "dragging while off must not add a mark");
+    await f.command("status");
+    assert.equal(f.notifications.at(-1), "marker: off · 1 笔 · 1/1 段已匹配");
+    assert.equal(f.statuses.has("pi-marker"), false);
+    assert.equal(highlightedText(f.tui.getScreenLines()), "this phrase");
+    await f.command("erase");
+    assert.equal(f.statuses.get("pi-marker"), "marker: 1");
+    await f.command("   ");
+    assert.equal(f.statuses.has("pi-marker"), false);
+    await f.command("");
+    assert.equal(f.statuses.get("pi-marker"), "marker: 1");
+    f.drag("中文测试");
+    assert.equal(f.statuses.get("pi-marker"), "marker: 2");
   } finally { f.close(); s.clean(); }
 });
 
@@ -169,23 +200,31 @@ test("commands support keyboard marks, erasing, clear, undo and branch navigatio
     await f.command("text this phrase");
     await f.command("text 中文测试");
     const markedLeaf = s.manager.getLeafId()!;
+    assert.equal(f.statuses.has("pi-marker"), false);
     assert.equal(highlightedText(f.tui.getScreenLines()), "this phrase中文测试");
     await f.command("erase");
+    assert.equal(f.statuses.get("pi-marker"), "marker: 2");
     f.drag("中文测试");
+    assert.equal(f.statuses.get("pi-marker"), "marker: 1");
     assert.equal(highlightedText(f.tui.getScreenLines()), "this phrase");
     await f.command("undo");
+    assert.equal(f.statuses.get("pi-marker"), "marker: 2");
     assert.equal(highlightedText(f.tui.getScreenLines()), "this phrase中文测试");
     await f.command("clear");
+    assert.equal(f.statuses.get("pi-marker"), "marker: 0");
     assert.equal(highlightedText(f.tui.getScreenLines()), "");
     await f.command("undo");
+    assert.equal(f.statuses.get("pi-marker"), "marker: 2");
     assert.equal(highlightedText(f.tui.getScreenLines()), "this phrase中文测试");
     s.manager.branch(s.answerId);
     f.events.get("session_tree")!({}, f.context);
     f.tui.renderNow();
+    assert.equal(f.statuses.get("pi-marker"), "marker: 0");
     assert.equal(highlightedText(f.tui.getScreenLines()), "");
     s.manager.branch(markedLeaf);
     f.events.get("session_tree")!({}, f.context);
     f.tui.renderNow();
+    assert.equal(f.statuses.get("pi-marker"), "marker: 2");
     assert.equal(highlightedText(f.tui.getScreenLines()), "this phrase中文测试");
     assert.ok(!f.notifications.some((text) => text.includes("失败")));
   } finally { f.close(); s.clean(); }
@@ -215,8 +254,11 @@ test("reload and fullscreen/regular replacement rebind the stable TUI proxy safe
     assert.equal(highlightedText(f.tui.getScreenLines()), "this phrase");
     await f.command("on");
     f.switchMode("regular");
+    assert.equal(f.statuses.has("pi-marker"), false);
+    await f.command("status");
+    assert.match(f.notifications.at(-1)!, /^marker: off · 1 笔 · 0\/1 段已匹配 · Pi \S+：[^\r\n]*Fullscreen[^\r\n]*$/);
     await f.command("on");
-    assert.ok(f.notifications.some((message) => message.includes("Fullscreen")));
+    assert.match(f.notifications.at(-1)!, /Fullscreen/);
     f.switchMode("fullscreen");
     assert.equal(highlightedText(f.tui.getScreenLines()), "this phrase");
     await f.command("on");
@@ -466,6 +508,7 @@ test("erasing part of a multi-message stroke preserves its other spans and strok
     assert.equal(store.groups.length, 1);
     assert.equal(store.groups[0].id, original.id);
     assert.equal(store.spans.length, 3);
+    assert.equal(f.statuses.get("pi-marker"), "marker: 1", "count strokes rather than segments");
     assert.deepEqual(store.spans[2], original.spans[1]);
     await f.command("undo");
     assert.equal(highlightedText(f.tui.getScreenLines()), "ABCD EFGHIJKL MNOP");

@@ -84,8 +84,8 @@ def snapshot():
 
 try:
     pump_until(lambda: b"marker target" in output, 12)
-    send("/marker on\r")
-    pump_until(lambda: b"marker:mark" in output)
+    send("/marker\r")
+    pump_until(lambda: b"marker: 0" in output)
     metadata = snapshot()
     expected_version = os.environ.get("PI_MARKER_TEST_EXPECT_VERSION")
     if expected_version:
@@ -97,7 +97,7 @@ try:
     send(f"\x1b[<0;{start};{row}M\x1b[<32;{end};{row}M\x1b[<0;{end};{row}m")
     pump_until(lambda: marked() or "请选择已完成".encode() in output or "未识别到当前布局".encode() in output)
     assert marked(), "Mouse selection did not persist a mark in the real CLI"
-    pump_until(lambda: b"\x1b[48;2;255;220;85m" in output)
+    pump_until(lambda: b"\x1b[48;2;255;220;85m" in output and b"marker: 1" in output)
     assert snapshot()["yellowText"] == "marker target", "Highlight must cover only the selected text"
     expected = os.environ.get("PI_MARKER_TEST_EXPECT_MARKDOWN", "marker target\n")
     export_path = work / "highlights.md"
