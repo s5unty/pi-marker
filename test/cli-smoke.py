@@ -144,6 +144,7 @@ try:
     assert snapshot()["yellowText"] == "marget", "Split anchors must survive CLI reload"
     send("/marker undo\r")
     assert snapshot()["yellowText"] == "marker target", "One undo must restore the complete original stroke"
+    assert "升级 pi-marker".encode() not in output, "A working host must not prompt users to upgrade pi-marker"
     print(f"PASS: Pi {metadata['version']} actual CLI mouse marks, exact Markdown file export" + (", isolated OSC52 clipboard" if verify_clipboard else "") + ", live partial erasure, /reload and undo")
     succeeded = True
 finally:

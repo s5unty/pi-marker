@@ -3,11 +3,11 @@
 Pi 原位荧光笔插件：打开标记模式后，用鼠标拖选已经完成的 AI 回答，松开后留下黄色背景，可以连续标记多处。重新拖选碰到已有高亮时，实时擦除相交部分，未选中的高亮保持不变。
 标记保存在会话中，不改写回答，不进入模型上下文。支持将当前分支的全部高亮导出为 **Markdown 文件或剪贴板内容**。
 
-**实验版，支持 `@earendil-works/pi-coding-agent` / `pi-tui` 1.5.2 和 1.6.0 的 Fullscreen 模式。**
+**实验版，需要 Pi 的 Fullscreen 模式。**
 
-这是纯插件，不需要修改或重新编译 Pi 核心。它确实依赖少量 **私有运行时接口**，不是官方稳定的标注 API：未验证的 Pi 版本会拒绝安装这些钩子，不能假定升级后可直接使用。
+这是纯插件，不需要修改或重新编译 Pi 核心。标记依赖少量 **私有运行时接口**：加载时检查实际的 TUI 选区与渲染接口，不按 Pi 版本号拒绝加载或提示升级。所需接口缺失时不会安装钩子，`/marker status` 会显示 Pi 版本和具体原因。渲染布局或文字锚点无法验证时不会猜测位置，已保存的记录会保留。
 
-精确版本检查是本插件针对私有接口采取的保护措施，**不是 Pi 对所有插件的要求**。开发依赖固定版本以便复现测试，`peerDependencies` 保持 `"*"`，运行时再检查已验证版本及接口形状；不是通过 npm 强制宿主降级。
+开发依赖固定版本以便复现测试，`peerDependencies` 保持 `"*"`。通过接口检查并不保证未来的私有接口行为不变。
 
 `0.2.3` 支持 Pi 1.6.0：兼容新的 `childLines` 布局缓存和只读渲染数组，同时保留 1.5.2 的 `mouseLayout` 适配。会话高亮格式不变，旧记录无需迁移；已加入由 1.5.2 实际生成的锚点恢复回归测试。也适配 **pi-tidy 0.11.1** 新增的段间空行、边框留白和代码按钮偏移；以实际布局坐标定位，不猜测固定边框高度，已通过其 `frame`、`rail`、`rules`、`off` 四种布局的真实 CLI 测试。
 
@@ -136,7 +136,7 @@ npm run check
 npm test
 ```
 
-开发依赖固定为 Pi 1.6.0；未修改 Pi 核心或依赖源码。测试辅助代码使用实际安装的宿主版本，不伪装版本号。兼容性测试还覆盖冻结的渲染数组、缓存复用、损坏布局的安全拒绝，以及旧高亮的恢复、换行、导出和撤销。
+开发依赖固定为 Pi 1.6.0；未修改 Pi 核心或依赖源码。测试辅助代码使用实际安装的宿主，不伪装版本号。兼容性测试覆盖接口缺失时不安装钩子、冻结的渲染数组、缓存复用、损坏布局的安全拒绝，以及旧高亮的恢复、换行、导出和撤销。
 
 测试不是只有 mock：使用真实 `TuiAltScreen`、`AssistantMessageComponent`、Markdown 渲染器、`SessionManager` 和 jiti 扩展加载器。单元/集成测试的终端使用内存替身，注入实际 SGR 鼠标序列，覆盖持久化/恢复、分支、擦除/撤销、模式切换、reload、剪贴板隔离、Unicode、ANSI、滚动、重复文本、源内容变化和 pi-tidy 呈现树。
 
@@ -144,6 +144,8 @@ npm test
 
 ```bash
 npm run test:cli
+# 测试终端当前使用的 Pi，而不是 npm 脚本优先找到的项目内版本
+PI_MARKER_TEST_CLI="$(command -v pi)" PI_MARKER_TEST_EXPECT_VERSION="$(pi --version)" npm run test:cli
 # 同时加载本机已安装的 pi-tidy；其他机器请替换为实际入口路径
 npm run test:cli -- /sun/.pi/agent/npm/node_modules/pi-tidy/src/index.ts
 ```
@@ -167,7 +169,7 @@ npm run test:cli -- /sun/.pi/agent/npm/node_modules/pi-tidy/src/index.ts
 ## 实现结构
 
 - `src/index.ts`：扩展生命周期、零高度 TUI 桥接组件、命令与状态。
-- `src/pi-adapter.ts`：集中隔离 Pi 1.5.2 / 1.6.0 的私有选区/布局接口；标记仅包装当前 renderer 实例的方法。导出时在实际宽度重绘选中块的 Markdown 实例，临时捕获 token 渲染信息，并在 `finally` 中恢复原方法描述符；绝不改全局原型或核心文件。
+- `src/pi-adapter.ts`：集中隔离 Pi 的私有选区/布局接口；标记仅包装当前 renderer 实例的方法。导出时在实际宽度重绘选中块的 Markdown 实例，临时捕获 token 渲染信息，并在 `finally` 中恢复原方法描述符；绝不改全局原型或核心文件。
 - `src/text-map.ts`：字素/显示列映射和 ANSI 安全背景色装饰。
 - `src/store.ts`：版本化操作日志、分支重放、撤销。
 - `src/markdown-export.ts`：校验完整显示字素流，裁剪 token 树，仅序列化选中内容与必要格式。

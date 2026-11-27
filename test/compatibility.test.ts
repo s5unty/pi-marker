@@ -1,21 +1,26 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { VERSION, type SessionEntry } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, type Component } from "@earendil-works/pi-tui";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { TuiAltScreen, stripTerminalSequences, type Component } from "@earendil-works/pi-tui";
 import { formatHighlights } from "../src/markdown-export.ts";
-import { getPiVersionError, TESTED_PI_VERSIONS } from "../src/pi-adapter.ts";
+import { MarkerAdapter, type AdapterHost } from "../src/pi-adapter.ts";
 import { ENTRY_TYPE, MarkerStore } from "../src/store.ts";
-import { assistantEntry, harness, highlightedText } from "./helpers.ts";
+import { assistantEntry, FakeTerminal, harness, highlightedText } from "./helpers.ts";
 
-test("the tested-release policy accepts both supported hosts, not arbitrary newer versions", () => {
-  assert.deepEqual(TESTED_PI_VERSIONS, ["1.5.2", "1.6.0"]);
-  for (const version of [...TESTED_PI_VERSIONS, VERSION]) assert.equal(getPiVersionError(version), undefined);
-  for (const version of ["1.5.1", "1.6.1", "1.6.0-beta.1", "2.0.0", "unknown"]) {
-    const error = getPiVersionError(version);
-    assert.ok(error);
-    assert.ok(error.includes(version));
-    assert.match(error, /未安装任何私有接口钩子/);
+test("missing fullscreen capabilities fail before any renderer hooks are installed", () => {
+  const host: AdapterHost = {
+    getBranch: () => [], getMode: () => "off", getSpans: () => [],
+    commitSelection: () => assert.fail("must not save marks"), report: () => assert.fail("must not run hooks"),
+  };
+  for (const capability of ["handleSelectionMouseEvent", "getSelectionBounds", "getSelectionColumns", "applySearchHighlights",
+    "applySelection", "handleViewportInput", "getCopyOnSelect", "setCopyOnSelect", "resetTextSelection", "requestRender",
+    "inputListeners", "selectionPressActive"]) {
+    const tui = new TuiAltScreen(new FakeTerminal());
+    Object.defineProperty(tui, capability, { value: undefined });
+    const before = Object.getOwnPropertyDescriptors(tui);
+    assert.throws(() => new MarkerAdapter(tui, host), new RegExp(`不兼容的 Pi TUI：.*${capability}`));
+    assert.deepEqual(Object.getOwnPropertyDescriptors(tui), before);
   }
 });
 

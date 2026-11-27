@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Container, Text, TuiAltScreen, stripTerminalSequences } from "@earendil-works/pi-tui";
-import { MarkerAdapter, resolveRenderer } from "../src/pi-adapter.ts";
+import { resolveRenderer } from "../src/pi-adapter.ts";
 import { assistantEntry, componentFor, FakeTerminal, harness, highlightedText } from "./helpers.ts";
 
 test("real Pi mouse pipeline commits and retains multiple marks without copying", () => {
@@ -173,7 +173,7 @@ test("Escape cancels an owned drag even when native transcript search consumes t
   } finally { h.close(); }
 });
 
-test("proxy unwrapping does not leave properties and version gates fail closed", () => {
+test("proxy unwrapping does not leave properties", () => {
   const tui = new TuiAltScreen(new FakeTerminal());
   const before = Reflect.ownKeys(tui);
   const reference = new Proxy(tui, {
@@ -183,7 +183,5 @@ test("proxy unwrapping does not leave properties and version gates fail closed",
     },
   });
   assert.equal(resolveRenderer(reference), tui);
-  assert.deepEqual(Reflect.ownKeys(tui), before);
-  assert.throws(() => new MarkerAdapter(tui, { version: "9.9.9", getBranch: () => [], getMode: () => "off", getSpans: () => [], commitSelection: () => true, report: () => {} }), /仅验证过/);
   assert.deepEqual(Reflect.ownKeys(tui), before);
 });

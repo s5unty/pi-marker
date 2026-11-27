@@ -1,4 +1,4 @@
-import { AssistantMessageComponent, getMarkdownTheme, initTheme, VERSION, type SessionEntry } from "@earendil-works/pi-coding-agent";
+import { AssistantMessageComponent, getMarkdownTheme, initTheme, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { Container, ScrollView, Text, TuiAltScreen, VStack, setCapabilities, stripTerminalSequences, visibleWidth, type Terminal, type ProgramStatus } from "@earendil-works/pi-tui";
 import { MarkerAdapter } from "../src/pi-adapter.ts";
 import type { MarkSpan, MarkerMode } from "../src/types.ts";
@@ -67,7 +67,6 @@ export function harness(entries = [assistantEntry("Hello **marker** world. ä¸­æ–
   let spans: MarkSpan[] = [];
   const reports: string[] = [];
   const adapter = new MarkerAdapter(tui, {
-    version: VERSION,
     getBranch: () => branch,
     getMode: () => mode,
     getSpans: () => spans,

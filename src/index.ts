@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { copyToClipboard, VERSION, type ExtensionAPI, type ExtensionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { getPiVersionError, MarkerAdapter, resolveRenderer } from "./pi-adapter.ts";
+import { MarkerAdapter, resolveRenderer } from "./pi-adapter.ts";
 import { ENTRY_TYPE, MarkerStore, type MarkerOperation } from "./store.ts";
 import type { MarkSpan, MarkerMode, SpanReplacement } from "./types.ts";
 import { formatHighlights } from "./markdown-export.ts";
@@ -101,12 +101,6 @@ export default function markerExtension(pi: ExtensionAPI, services: MarkerServic
       status();
       return;
     }
-    const versionError = getPiVersionError(VERSION);
-    if (versionError) {
-      unavailable = versionError;
-      status();
-      return;
-    }
     // The injected reference follows renderer replacement in /settings. Compare
     // per-renderer input-listener sets, not the stable Proxy or terminal object.
     if (renderer && (renderer as { inputListeners?: unknown }).inputListeners ===
@@ -114,7 +108,7 @@ export default function markerExtension(pi: ExtensionAPI, services: MarkerServic
     detach();
     try {
       renderer = resolveRenderer(reference);
-      adapter = new MarkerAdapter(renderer, { version: VERSION, getBranch: branch, getMode: () => mode,
+      adapter = new MarkerAdapter(renderer, { getBranch: branch, getMode: () => mode,
         getSpans: () => store.spans, commitSelection, report });
       unavailable = undefined;
     } catch (error) {
@@ -249,9 +243,11 @@ export default function markerExtension(pi: ExtensionAPI, services: MarkerServic
           case "status": {
             ensureAdapter();
             const info = adapter?.diagnostics;
+            const adapterStatus = unavailable ?? (info?.failed ? "适配器已停用，请 /reload。" :
+              info ? "私有接口适配已启用。" : "TUI 尚未准备好。");
             ctx.ui.notify(`marker:${mode}；${store.groups.length} 笔 / ${store.spans.length} 段；${info?.mapped ?? 0} 段已匹配当前文档。\n` +
               `会话 AI 消息 ${info?.messages ?? 0}；可标记文本块 ${info?.indexed ?? 0}；pi-tidy 布局 ${info?.tidyMessages ?? 0} 条。\n` +
-              (unavailable ?? (info?.failed ? "适配器已停用，请 /reload。" : `Pi ${VERSION} 私有接口适配已启用。`)) +
+              `Pi ${VERSION}：${adapterStatus}` +
               "\n未匹配的标记会保留记录但不绘制，不猜测位置。", "info");
             break;
           }

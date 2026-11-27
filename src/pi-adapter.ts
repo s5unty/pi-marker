@@ -4,14 +4,6 @@ import { buildTextMap, cellsForTextRange, findTextRanges, hashText, paintLine, q
 import type { MarkSpan, MarkerMode, SpanReplacement } from "./types.ts";
 import type { MarkdownEvidence, MarkdownSelection } from "./markdown-export.ts";
 
-export const TESTED_PI_VERSIONS: readonly string[] = ["1.5.2", "1.6.0"];
-
-/** Private hooks are opt-in per verified release, not a public Pi requirement. */
-export function getPiVersionError(version: string): string | undefined {
-  if (TESTED_PI_VERSIONS.includes(version)) return undefined;
-  return `pi-marker 仅验证过 Pi ${TESTED_PI_VERSIONS.join("、")}；当前为 ${version}。未安装任何私有接口钩子，请升级 pi-marker 后重试。`;
-}
-
 const ATTACHED = Symbol.for("pi-marker.adapter.v1");
 // pi-tidy renders a separate presentation tree, sometimes without ever
 // rendering Pi's original containers. Read its last-frame geometry, not config.
@@ -71,7 +63,6 @@ interface PrivateTui {
 }
 
 export interface AdapterHost {
-  version: string;
   getBranch(): readonly SessionEntry[];
   getMode(): MarkerMode;
   getSpans(): readonly MarkSpan[];
@@ -300,14 +291,15 @@ export class MarkerAdapter {
   private mapped = 0;
 
   constructor(renderer: object, host: AdapterHost) {
-    const versionError = getPiVersionError(host.version);
-    if (versionError) throw new Error(versionError);
     const tui = renderer as PrivateTui;
     if (tui.mode !== "fullscreen") throw new Error("pi-marker 需要 Fullscreen 模式。");
+    // Check the live renderer before modifying it. Layouts and anchors are
+    // validated separately once a frame is available; version alone proves neither.
     for (const name of ["handleSelectionMouseEvent", "getSelectionBounds", "getSelectionColumns", "applySearchHighlights", "applySelection", "handleViewportInput", "getCopyOnSelect", "setCopyOnSelect", "resetTextSelection", "requestRender"] as const) {
-      if (typeof tui[name] !== "function") throw new Error(`不兼容的 Pi TUI：缺少 ${name}。`);
+      if (typeof tui[name] !== "function") throw new Error(`不兼容的 Pi TUI：缺少 ${name} 方法。`);
     }
-    if (!(tui.inputListeners instanceof Set)) throw new Error("不兼容的 Pi TUI 输入层。");
+    if (!(tui.inputListeners instanceof Set)) throw new Error("不兼容的 Pi TUI：无法识别 inputListeners 输入层。");
+    if (typeof tui.selectionPressActive !== "boolean") throw new Error("不兼容的 Pi TUI：无法识别 selectionPressActive 选区状态。");
     if (tui[ATTACHED]) throw new Error("pi-marker 已加载；请移除重复的插件配置。");
     this.tui = tui;
     this.host = host;
